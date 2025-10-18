@@ -482,12 +482,10 @@ railway up
 
 ## 👥 Team
 
-| Name | Role | GitHub | Twitter |
+| Name | Role | GitHub | X |
 |------|------|--------|---------|
-| **Alice Chen** | Full-Stack Engineer | [@alice](https://github.com/alice) | [@alice_dev](https://twitter.com/alice_dev) |
-| **Bob Zhang** | Frontend Engineer | [@bob](https://github.com/bob) | [@bob_ui](https://twitter.com/bob_ui) |
-| **Carol Li** | Cryptography Researcher | [@carol](https://github.com/carol) | [@carol_crypto](https://twitter.com/carol_crypto) |
-| **David Wang** | Product Manager | [@david](https://github.com/david) | [@david_pm](https://twitter.com/david_pm) |
+| **Junhua Xie** | Full-Stack Engineer | [@Junhua](https://github.com/XieJunhua) | [@Junhua](https://x.com/xiejunhua20081)) |
+| **Lee Zhang** | Product Manager | [@dropineth](https://github.com/dropineth) | [@whuzhl](https://x.com/whuzhl) |
 
 ---
 
@@ -532,10 +530,9 @@ in the Software without restriction...
 
 ## 🔗 Links
 
-- **Documentation**: [docs.cai-framework.eth](https://docs.cai-framework.eth)
-- **Discord**: [discord.gg/cai-framework](https://discord.gg/cai-framework)
-- **Twitter**: [@CAI_Framework](https://twitter.com/CAI_Framework)
-- **Medium**: [blog.cai-framework.eth](https://blog.cai-framework.eth)
+- **Documentation**: [docs.clippy.life](https://docs.clippy,life)
+- **X**: [@Life++](https://x.com/lifepp_xyz)
+- **TG**: [Life++Community](https://t.me/lifeppxyz)
 
 ---
 
@@ -550,9 +547,9 @@ in the Software without restriction...
 
 ## 📞 Contact
 
-- **Email**: team@cai-framework.eth
-- **Technical Support**: dev@cai-framework.eth
-- **Business Inquiries**: bd@cai-framework.eth
+- **Email**: clippylife@gmail.com
+- **Technical Support**: clippylife@gmail.com
+- **Business Inquiries**: clippylife@gmail.com
 
 ---
 
