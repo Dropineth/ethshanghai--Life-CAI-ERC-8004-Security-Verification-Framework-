@@ -1,0 +1,709 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+// ============================================================================
+// CAI × ERC-8004 Framework - Core Contracts
+// ETH Shanghai 2025 Hackathon
+// ============================================================================
+
+// ============================================================================
+// File: contracts/src/interfaces/IERC8004.sol
+// ============================================================================
+
+/**
+ * @title IERC8004
+ * @dev AI Agent Commerce Standard Interface
+ * @notice Defines the standard interface for AI-driven commercial transactions
+ */
+interface IERC8004 {
+    /// @notice Emitted when an agent initiates a transaction
+    event TransactionInitiated(
+        bytes32 indexed transactionId,
+        address indexed agent,
+        address indexed merchant,
+        uint256 amount,
+        bytes32 cartHash
+    );
+    
+    /// @notice Emitted when a transaction is completed
+    event TransactionCompleted(
+        bytes32 indexed transactionId,
+        bytes32 receiptHash,
+        uint256 timestamp
+    );
+    
+    /// @notice Emitted when a transaction is disputed
+    event TransactionDisputed(
+        bytes32 indexed transactionId,
+        address indexed disputer,
+        string reason
+    );
+    
+    /**
+     * @notice Initialize a transaction with signed mandate
+     * @param agent The agent's DID address
+     * @param merchant The merchant's address
+     * @param amount Transaction amount in wei
+     * @param cartHash Hash of the shopping cart
+     * @param mandateSignature User's mandate signature
+     * @return transactionId Unique transaction identifier
+     */
+    function initiateTransaction(
+        address agent,
+        address merchant,
+        uint256 amount,
+        bytes32 cartHash,
+        bytes calldata mandateSignature
+    ) external returns (bytes32 transactionId);
+    
+    /**
+     * @notice Complete a transaction with payment receipt
+     * @param transactionId Transaction to complete
+     * @param receiptHash Hash of payment receipt
+     * @param receiptSignature Payment provider's signature
+     */
+    function completeTransaction(
+        bytes32 transactionId,
+        bytes32 receiptHash,
+        bytes calldata receiptSignature
+    ) external;
+    
+    /**
+     * @notice Dispute a transaction
+     * @param transactionId Transaction to dispute
+     * @param reason Dispute reason
+     */
+    function disputeTransaction(
+        bytes32 transactionId,
+        string calldata reason
+    ) external;
+    
+    /**
+     * @notice Get transaction details
+     * @param transactionId Transaction identifier
+     * @return Transaction struct with all details
+     */
+    function getTransaction(bytes32 transactionId) external view returns (
+        address agent,
+        address merchant,
+        uint256 amount,
+        bytes32 cartHash,
+        bytes32 receiptHash,
+        uint8 status,
+        uint256 timestamp
+    );
+}
+
+// ============================================================================
+// File: contracts/src/CAIRegistry.sol
+// ============================================================================
+
+/**
+ * @title CAIRegistry
+ * @dev Decentralized Identity Registry for AI Agents and Users
+ * @notice Manages DID registration, credential verification, and revocation
+ */
+contract CAIRegistry {
+    // DID Status enum
+    enum DIDStatus { Inactive, Active, Revoked, Suspended }
+    
+    // DID Record structure
+    struct DIDRecord {
+        address owner;
+        string didDocument;      // IPFS hash or JSON-LD document
+        uint256 createdAt;
+        uint256 updatedAt;
+        DIDStatus status;
+        bytes32 credentialHash;  // Hash of associated VC
+        uint256 nonce;           // For replay protection
+    }
+    
+    // Credential metadata
+    struct Credential {
+        bytes32 credentialHash;
+        address issuer;
+        address subject;
+        uint256 issuedAt;
+        uint256 expiresAt;
+        bool revoked;
+        string credentialType;   // "MandateVC", "CartVC", etc.
+    }
+    
+    // Storage
+    mapping(address => DIDRecord) public didRegistry;
+    mapping(bytes32 => Credential) public credentials;
+    mapping(address => bool) public trustedIssuers;
+    
+    address public admin;
+    uint256 public totalDIDs;
+    uint256 public totalCredentials;
+    
+    // Events
+    event DIDRegistered(address indexed did, string didDocument, uint256 timestamp);
+    event DIDUpdated(address indexed did, string newDocument, uint256 timestamp);
+    event DIDRevoked(address indexed did, uint256 timestamp);
+    event CredentialIssued(bytes32 indexed credentialHash, address indexed subject, uint256 timestamp);
+    event CredentialRevoked(bytes32 indexed credentialHash, uint256 timestamp);
+    event TrustedIssuerAdded(address indexed issuer);
+    event TrustedIssuerRemoved(address indexed issuer);
+    
+    // Modifiers
+    modifier onlyAdmin() {
+        require(msg.sender == admin, "CAIRegistry: caller is not admin");
+        _;
+    }
+    
+    modifier onlyDIDOwner(address did) {
+        require(didRegistry[did].owner == msg.sender, "CAIRegistry: not DID owner");
+        _;
+    }
+    
+    modifier onlyTrustedIssuer() {
+        require(trustedIssuers[msg.sender], "CAIRegistry: not trusted issuer");
+        _;
+    }
+    
+    constructor() {
+        admin = msg.sender;
+        trustedIssuers[msg.sender] = true;
+    }
+    
+    /**
+     * @notice Register a new DID
+     * @param didDocument IPFS hash or JSON-LD document URL
+     */
+    function registerDID(string calldata didDocument) external {
+        require(didRegistry[msg.sender].status == DIDStatus.Inactive, "CAIRegistry: DID already registered");
+        
+        didRegistry[msg.sender] = DIDRecord({
+            owner: msg.sender,
+            didDocument: didDocument,
+            createdAt: block.timestamp,
+            updatedAt: block.timestamp,
+            status: DIDStatus.Active,
+            credentialHash: bytes32(0),
+            nonce: 0
+        });
+        
+        totalDIDs++;
+        emit DIDRegistered(msg.sender, didDocument, block.timestamp);
+    }
+    
+    /**
+     * @notice Update DID document
+     * @param newDocument New document hash
+     */
+    function updateDID(string calldata newDocument) external onlyDIDOwner(msg.sender) {
+        require(didRegistry[msg.sender].status == DIDStatus.Active, "CAIRegistry: DID not active");
+        
+        didRegistry[msg.sender].didDocument = newDocument;
+        didRegistry[msg.sender].updatedAt = block.timestamp;
+        
+        emit DIDUpdated(msg.sender, newDocument, block.timestamp);
+    }
+    
+    /**
+     * @notice Revoke a DID
+     * @param did DID address to revoke
+     */
+    function revokeDID(address did) external {
+        require(
+            msg.sender == did || msg.sender == admin,
+            "CAIRegistry: unauthorized revocation"
+        );
+        require(didRegistry[did].status == DIDStatus.Active, "CAIRegistry: DID not active");
+        
+        didRegistry[did].status = DIDStatus.Revoked;
+        didRegistry[did].updatedAt = block.timestamp;
+        
+        emit DIDRevoked(did, block.timestamp);
+    }
+    
+    /**
+     * @notice Issue a verifiable credential
+     * @param subject Subject's DID address
+     * @param credentialHash Hash of the credential
+     * @param credentialType Type of credential (e.g., "MandateVC")
+     * @param expiresAt Expiration timestamp
+     */
+    function issueCredential(
+        address subject,
+        bytes32 credentialHash,
+        string calldata credentialType,
+        uint256 expiresAt
+    ) external onlyTrustedIssuer {
+        require(didRegistry[subject].status == DIDStatus.Active, "CAIRegistry: subject DID not active");
+        require(credentials[credentialHash].issuedAt == 0, "CAIRegistry: credential already exists");
+        require(expiresAt > block.timestamp, "CAIRegistry: invalid expiration");
+        
+        credentials[credentialHash] = Credential({
+            credentialHash: credentialHash,
+            issuer: msg.sender,
+            subject: subject,
+            issuedAt: block.timestamp,
+            expiresAt: expiresAt,
+            revoked: false,
+            credentialType: credentialType
+        });
+        
+        didRegistry[subject].credentialHash = credentialHash;
+        totalCredentials++;
+        
+        emit CredentialIssued(credentialHash, subject, block.timestamp);
+    }
+    
+    /**
+     * @notice Revoke a credential
+     * @param credentialHash Hash of credential to revoke
+     */
+    function revokeCredential(bytes32 credentialHash) external {
+        Credential storage cred = credentials[credentialHash];
+        require(
+            msg.sender == cred.issuer || msg.sender == admin,
+            "CAIRegistry: unauthorized revocation"
+        );
+        require(!cred.revoked, "CAIRegistry: already revoked");
+        
+        cred.revoked = true;
+        emit CredentialRevoked(credentialHash, block.timestamp);
+    }
+    
+    /**
+     * @notice Verify a credential is valid
+     * @param credentialHash Hash to verify
+     * @return valid True if credential is valid
+     */
+    function verifyCredential(bytes32 credentialHash) external view returns (bool valid) {
+        Credential storage cred = credentials[credentialHash];
+        
+        if (cred.issuedAt == 0) return false;
+        if (cred.revoked) return false;
+        if (block.timestamp > cred.expiresAt) return false;
+        if (didRegistry[cred.subject].status != DIDStatus.Active) return false;
+        
+        return true;
+    }
+    
+    /**
+     * @notice Add a trusted issuer
+     * @param issuer Address to add
+     */
+    function addTrustedIssuer(address issuer) external onlyAdmin {
+        trustedIssuers[issuer] = true;
+        emit TrustedIssuerAdded(issuer);
+    }
+    
+    /**
+     * @notice Remove a trusted issuer
+     * @param issuer Address to remove
+     */
+    function removeTrustedIssuer(address issuer) external onlyAdmin {
+        trustedIssuers[issuer] = false;
+        emit TrustedIssuerRemoved(issuer);
+    }
+    
+    /**
+     * @notice Get DID record
+     * @param did DID address
+     * @return DID record details
+     */
+    function getDID(address did) external view returns (
+        address owner,
+        string memory didDocument,
+        uint256 createdAt,
+        uint256 updatedAt,
+        DIDStatus status,
+        bytes32 credentialHash,
+        uint256 nonce
+    ) {
+        DIDRecord storage record = didRegistry[did];
+        return (
+            record.owner,
+            record.didDocument,
+            record.createdAt,
+            record.updatedAt,
+            record.status,
+            record.credentialHash,
+            record.nonce
+        );
+    }
+    
+    /**
+     * @notice Increment nonce for replay protection
+     * @param did DID address
+     */
+    function incrementNonce(address did) external onlyDIDOwner(did) {
+        didRegistry[did].nonce++;
+    }
+}
+
+// ============================================================================
+// File: contracts/src/AHINAnchor.sol
+// ============================================================================
+
+/**
+ * @title AHINAnchor
+ * @dev Active Hash Interaction Network - On-chain Audit Trail Anchoring
+ * @notice Stores Merkle roots of interaction chains for verification
+ */
+contract AHINAnchor {
+    // AHIN Block structure
+    struct AHINBlock {
+        bytes32 merkleRoot;
+        bytes32 prevBlockHash;
+        uint256 timestamp;
+        address submitter;
+        uint256 transactionCount;
+        string metadataURI;  // IPFS link to full audit bundle
+    }
+    
+    // Storage
+    mapping(uint256 => AHINBlock) public ahинBlocks;
+    uint256 public currentBlockNumber;
+    uint256 public totalTransactionsAnchored;
+    
+    mapping(address => bool) public authorizedAnchors;
+    address public admin;
+    
+    // Events
+    event BlockAnchored(
+        uint256 indexed blockNumber,
+        bytes32 merkleRoot,
+        uint256 transactionCount,
+        address indexed submitter
+    );
+    event AuthorizedAnchorAdded(address indexed anchor);
+    event AuthorizedAnchorRemoved(address indexed anchor);
+    
+    // Modifiers
+    modifier onlyAdmin() {
+        require(msg.sender == admin, "AHINAnchor: caller is not admin");
+        _;
+    }
+    
+    modifier onlyAuthorized() {
+        require(authorizedAnchors[msg.sender] || msg.sender == admin, "AHINAnchor: not authorized");
+        _;
+    }
+    
+    constructor() {
+        admin = msg.sender;
+        authorizedAnchors[msg.sender] = true;
+        currentBlockNumber = 0;
+    }
+    
+    /**
+     * @notice Anchor a new Merkle root
+     * @param merkleRoot Root hash of transaction batch
+     * @param transactionCount Number of transactions in batch
+     * @param metadataURI IPFS URI for full audit data
+     */
+    function anchorBlock(
+        bytes32 merkleRoot,
+        uint256 transactionCount,
+        string calldata metadataURI
+    ) external onlyAuthorized {
+        require(merkleRoot != bytes32(0), "AHINAnchor: invalid merkle root");
+        require(transactionCount > 0, "AHINAnchor: zero transactions");
+        
+        bytes32 prevHash = currentBlockNumber == 0 
+            ? bytes32(0) 
+            : keccak256(abi.encodePacked(
+                ahинBlocks[currentBlockNumber].merkleRoot,
+                ahинBlocks[currentBlockNumber].timestamp
+            ));
+        
+        currentBlockNumber++;
+        
+        ahинBlocks[currentBlockNumber] = AHINBlock({
+            merkleRoot: merkleRoot,
+            prevBlockHash: prevHash,
+            timestamp: block.timestamp,
+            submitter: msg.sender,
+            transactionCount: transactionCount,
+            metadataURI: metadataURI
+        });
+        
+        totalTransactionsAnchored += transactionCount;
+        
+        emit BlockAnchored(currentBlockNumber, merkleRoot, transactionCount, msg.sender);
+    }
+    
+    /**
+     * @notice Verify a transaction is anchored
+     * @param blockNumber Block number to check
+     * @param transactionHash Hash of transaction
+     * @param proof Merkle proof
+     * @return valid True if proof is valid
+     */
+    function verifyTransaction(
+        uint256 blockNumber,
+        bytes32 transactionHash,
+        bytes32[] calldata proof
+    ) external view returns (bool valid) {
+        require(blockNumber <= currentBlockNumber, "AHINAnchor: invalid block number");
+        
+        bytes32 computedRoot = transactionHash;
+        
+        for (uint256 i = 0; i < proof.length; i++) {
+            if (computedRoot < proof[i]) {
+                computedRoot = keccak256(abi.encodePacked(computedRoot, proof[i]));
+            } else {
+                computedRoot = keccak256(abi.encodePacked(proof[i], computedRoot));
+            }
+        }
+        
+        return computedRoot == ahинBlocks[blockNumber].merkleRoot;
+    }
+    
+    /**
+     * @notice Get block details
+     * @param blockNumber Block to query
+     * @return Block details
+     */
+    function getBlock(uint256 blockNumber) external view returns (
+        bytes32 merkleRoot,
+        bytes32 prevBlockHash,
+        uint256 timestamp,
+        address submitter,
+        uint256 transactionCount,
+        string memory metadataURI
+    ) {
+        require(blockNumber <= currentBlockNumber, "AHINAnchor: invalid block number");
+        AHINBlock storage ahinBlock = ahинBlocks[blockNumber];
+        return (
+            ahinBlock.merkleRoot,
+            ahinBlock.prevBlockHash,
+            ahinBlock.timestamp,
+            ahinBlock.submitter,
+            ahinBlock.transactionCount,
+            ahinBlock.metadataURI
+        );
+    }
+    
+    /**
+     * @notice Verify chain integrity
+     * @param fromBlock Starting block
+     * @param toBlock Ending block
+     * @return valid True if chain is intact
+     */
+    function verifyChainIntegrity(uint256 fromBlock, uint256 toBlock) external view returns (bool valid) {
+        require(fromBlock <= toBlock && toBlock <= currentBlockNumber, "AHINAnchor: invalid range");
+        
+        for (uint256 i = fromBlock + 1; i <= toBlock; i++) {
+            bytes32 expectedPrevHash = keccak256(abi.encodePacked(
+                ahинBlocks[i - 1].merkleRoot,
+                ahинBlocks[i - 1].timestamp
+            ));
+            
+            if (ahинBlocks[i].prevBlockHash != expectedPrevHash) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    /**
+     * @notice Add authorized anchor
+     * @param anchor Address to authorize
+     */
+    function addAuthorizedAnchor(address anchor) external onlyAdmin {
+        authorizedAnchors[anchor] = true;
+        emit AuthorizedAnchorAdded(anchor);
+    }
+    
+    /**
+     * @notice Remove authorized anchor
+     * @param anchor Address to remove
+     */
+    function removeAuthorizedAnchor(address anchor) external onlyAdmin {
+        authorizedAnchors[anchor] = false;
+        emit AuthorizedAnchorRemoved(anchor);
+    }
+}
+
+// ============================================================================
+// File: contracts/src/ERC8004Agent.sol
+// ============================================================================
+
+/**
+ * @title ERC8004Agent
+ * @dev Implementation of ERC-8004 AI Agent Commerce Standard
+ * @notice Integrates CAIRegistry and AHINAnchor for complete verification
+ */
+contract ERC8004Agent is IERC8004 {
+    // Transaction Status
+    enum TxStatus { Pending, Completed, Disputed, Cancelled }
+    
+    // Transaction structure
+    struct Transaction {
+        bytes32 transactionId;
+        address agent;
+        address merchant;
+        address user;
+        uint256 amount;
+        bytes32 cartHash;
+        bytes32 mandateHash;
+        bytes32 receiptHash;
+        TxStatus status;
+        uint256 createdAt;
+        uint256 completedAt;
+        string disputeReason;
+    }
+    
+    // Storage
+    mapping(bytes32 => Transaction) public transactions;
+    CAIRegistry public registry;
+    AHINAnchor public anchor;
+    
+    uint256 public totalTransactions;
+    uint256 public transactionNonce;
+    
+    // Events (inherited from IERC8004)
+    
+    constructor(address _registry, address _anchor) {
+        registry = CAIRegistry(_registry);
+        anchor = AHINAnchor(_anchor);
+    }
+    
+    /**
+     * @inheritdoc IERC8004
+     */
+    function initiateTransaction(
+        address agent,
+        address merchant,
+        uint256 amount,
+        bytes32 cartHash,
+        bytes calldata mandateSignature
+    ) external override returns (bytes32 transactionId) {
+        // Verify agent is registered and active
+        (,, uint256 createdAt,, CAIRegistry.DIDStatus status,,) = registry.getDID(agent);
+        require(createdAt > 0 && status == CAIRegistry.DIDStatus.Active, "ERC8004: invalid agent DID");
+        
+        // Generate unique transaction ID
+        transactionId = keccak256(abi.encodePacked(
+            agent,
+            merchant,
+            cartHash,
+            transactionNonce++,
+            block.timestamp
+        ));
+        
+        // Verify mandate signature (simplified - full implementation would use ECDSA)
+        bytes32 mandateHash = keccak256(mandateSignature);
+        
+        // Create transaction record
+        transactions[transactionId] = Transaction({
+            transactionId: transactionId,
+            agent: agent,
+            merchant: merchant,
+            user: msg.sender,
+            amount: amount,
+            cartHash: cartHash,
+            mandateHash: mandateHash,
+            receiptHash: bytes32(0),
+            status: TxStatus.Pending,
+            createdAt: block.timestamp,
+            completedAt: 0,
+            disputeReason: ""
+        });
+        
+        totalTransactions++;
+        
+        emit TransactionInitiated(transactionId, agent, merchant, amount, cartHash);
+        
+        return transactionId;
+    }
+    
+    /**
+     * @inheritdoc IERC8004
+     */
+    function completeTransaction(
+        bytes32 transactionId,
+        bytes32 receiptHash,
+        bytes calldata receiptSignature
+    ) external override {
+        Transaction storage txn = transactions[transactionId];
+        require(txn.status == TxStatus.Pending, "ERC8004: transaction not pending");
+        require(
+            msg.sender == txn.agent || msg.sender == txn.merchant,
+            "ERC8004: unauthorized completion"
+        );
+        
+        // Verify receipt signature (simplified)
+        require(receiptHash != bytes32(0), "ERC8004: invalid receipt");
+        require(receiptSignature.length > 0, "ERC8004: missing signature");
+        
+        txn.receiptHash = receiptHash;
+        txn.status = TxStatus.Completed;
+        txn.completedAt = block.timestamp;
+        
+        emit TransactionCompleted(transactionId, receiptHash, block.timestamp);
+    }
+    
+    /**
+     * @inheritdoc IERC8004
+     */
+    function disputeTransaction(
+        bytes32 transactionId,
+        string calldata reason
+    ) external override {
+        Transaction storage txn = transactions[transactionId];
+        require(txn.status == TxStatus.Pending || txn.status == TxStatus.Completed, "ERC8004: invalid status");
+        require(msg.sender == txn.user || msg.sender == txn.merchant, "ERC8004: unauthorized dispute");
+        
+        txn.status = TxStatus.Disputed;
+        txn.disputeReason = reason;
+        
+        emit TransactionDisputed(transactionId, msg.sender, reason);
+    }
+    
+    /**
+     * @inheritdoc IERC8004
+     */
+    function getTransaction(bytes32 transactionId) external view override returns (
+        address agent,
+        address merchant,
+        uint256 amount,
+        bytes32 cartHash,
+        bytes32 receiptHash,
+        uint8 status,
+        uint256 timestamp
+    ) {
+        Transaction storage txn = transactions[transactionId];
+        return (
+            txn.agent,
+            txn.merchant,
+            txn.amount,
+            txn.cartHash,
+            txn.receiptHash,
+            uint8(txn.status),
+            txn.createdAt
+        );
+    }
+    
+    /**
+     * @notice Verify transaction integrity with AHIN
+     * @param transactionId Transaction to verify
+     * @param blockNumber AHIN block number
+     * @param proof Merkle proof
+     * @return valid True if transaction is anchored
+     */
+    function verifyTransactionIntegrity(
+        bytes32 transactionId,
+        uint256 blockNumber,
+        bytes32[] calldata proof
+    ) external view returns (bool valid) {
+        Transaction storage txn = transactions[transactionId];
+        require(txn.createdAt > 0, "ERC8004: transaction not found");
+        
+        bytes32 txHash = keccak256(abi.encodePacked(
+            txn.transactionId,
+            txn.cartHash,
+            txn.receiptHash
+        ));
+        
+        return anchor.verifyTransaction(blockNumber, txHash, proof);
+    }
+}
