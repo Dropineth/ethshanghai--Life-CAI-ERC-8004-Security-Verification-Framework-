@@ -141,7 +141,7 @@ graph TD
 ### 1️⃣ Clone Repository
 
 ```bash
-git clone https://github.com/your-org/cai-erc8004-framework.git
+git clone https://github.com/Dropineth/ethshanghai--Life-CAI-ERC-8004-Security-Verification-Framework-/cai--erc-8004-security--verification-framework/cai-erc8004-framework.git
 cd cai-erc8004-framework
 ```
 
